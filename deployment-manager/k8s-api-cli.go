@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"github.com/emicklei/go-restful"
 	"io"
@@ -10,11 +11,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/homedir"
 	"k8s.io/client-go/util/retry"
 	"log"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strconv"
+
+	//Uncomment the following line to load the gcp plugin (only required to authenticate against GKE clusters).
+	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 )
 
 var clientset *kubernetes.Clientset
@@ -26,14 +33,25 @@ type DeploymentInfo struct {
 }
 
 func main() {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		panic(err.Error())
-	}
-	clientset, err = kubernetes.NewForConfig(config)
-	if err != nil {
-		panic(err.Error())
-	}
+	CreateClient()
+	CreateDeploymentStruct()
+	CreateWebService()
+}
+
+func CreateWebService() {
+	ws := new(restful.WebService)
+	ws.Path("/deployment").
+		Consumes(restful.MIME_JSON, restful.MIME_JSON).
+		Produces(restful.MIME_JSON, restful.MIME_JSON)
+	ws.Route(ws.GET("/namespace/{namespace-name}").To(ListDeployment))
+	ws.Route(ws.POST("").To(CreateDeployment))
+	ws.Route(ws.PATCH("/{deployment-name}/namespace/{namespace-name}").To(UpdateDeployment))
+	ws.Route(ws.DELETE("/{deployment-name}/namespace/{namespace-name}").To(DeleteDeployment))
+	restful.Add(ws)
+	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func CreateDeploymentStruct() {
 	deployment = &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "demo-deployment",
@@ -69,17 +87,37 @@ func main() {
 			},
 		},
 	}
+}
 
-	ws := new(restful.WebService)
-	ws.Path("/deployment").
-		Consumes(restful.MIME_JSON, restful.MIME_JSON).
-		Produces(restful.MIME_JSON, restful.MIME_JSON)
-	ws.Route(ws.GET("/namespace/{namespace-name}").To(ListDeployment))
-	ws.Route(ws.POST("").To(CreateDeployment))
-	ws.Route(ws.PATCH("/{deployment-name}/namespace/{namespace-name}").To(UpdateDeployment))
-	ws.Route(ws.DELETE("/{deployment-name}/namespace/{namespace-name}").To(DeleteDeployment))
-	restful.Add(ws)
-	log.Fatal(http.ListenAndServe(":8080", nil))
+func CreateClient() {
+	config, err1 := rest.InClusterConfig()
+	if err1 != nil {
+		kubeconfig := ReadKubeConfig()
+		config = BuildConfigFromKubeConfig(config, kubeconfig)
+	}
+	clientset, err = kubernetes.NewForConfig(config)
+	if err != nil {
+		log.Fatal("Failed to create k8s api client.", err)
+	}
+}
+
+func BuildConfigFromKubeConfig(config *rest.Config, kubeconfig *string) *rest.Config {
+	config, err = clientcmd.BuildConfigFromFlags("", *kubeconfig)
+	if err != nil {
+		log.Fatal("Failed to configure client. Must run in cluster with a service account or must have a available config file on directory ~/.kube/")
+	}
+	return config
+}
+
+func ReadKubeConfig() *string {
+	var kubeconfig *string
+	if home := homedir.HomeDir(); home != "" {
+		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
+	} else {
+		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
+	}
+	flag.Parse()
+	return kubeconfig
 }
 
 func CreateDeployment(req *restful.Request, resp *restful.Response) {
@@ -170,7 +208,7 @@ func DeleteDeployment(req *restful.Request, resp *restful.Response) {
 
 func int32Ptr(i int32) *int32 { return &i }
 
-func RemoveNonAlphanumericChars(value string) string{
+func RemoveNonAlphanumericChars(value string) string {
 	reg, err := regexp.Compile("[^a-zA-Z0-9]+")
 	if err != nil {
 		log.Fatal(err)
