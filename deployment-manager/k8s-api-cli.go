@@ -123,7 +123,7 @@ func ReadKubeConfig() *string {
 func CreateDeployment(req *restful.Request, resp *restful.Response) {
 	deploy := new(DeploymentInfo)
 	req.ReadEntity(&deploy)
-	fmt.Println("Creating deployment...")
+	log.Print("Creating deployment")
 	appName := RemoveNonAlphanumericChars(deploy.Image)
 	deployment.ObjectMeta.Name = appName
 	deployment.Spec.Selector.MatchLabels["app"] = appName
@@ -138,8 +138,7 @@ func CreateDeployment(req *restful.Request, resp *restful.Response) {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("Created deployment %q.\n", result.GetObjectMeta().GetName())
-	io.WriteString(resp, "Created deployment "+result.GetObjectMeta().GetName())
+	log.Print("Created deployment %q.\n", result.GetObjectMeta().GetName())
 }
 
 func CreateNamespace(deploy *DeploymentInfo) error {
@@ -151,12 +150,13 @@ func CreateNamespace(deploy *DeploymentInfo) error {
 func UpdateDeployment(req *restful.Request, resp *restful.Response) {
 	namespace := req.PathParameter("namespace-name")
 	deploymentName := req.PathParameter("deployment-name")
-	fmt.Println("Updating deployment...")
+	log.Print("Updating deployment")
 	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		deploymentsClient := clientset.AppsV1().Deployments(namespace)
 		result, getErr := deploymentsClient.Get(deploymentName, metav1.GetOptions{})
 		if getErr != nil {
-			panic(fmt.Errorf("Failed to get latest version of Deployment: %v", getErr))
+			log.Fatal("Failed to get latest version of Deployment: %v", getErr)
+			resp.WriteError(500, err)
 		}
 
 		result.Spec.Replicas = int32Ptr(1)                           // reduce replica count
@@ -165,10 +165,10 @@ func UpdateDeployment(req *restful.Request, resp *restful.Response) {
 		return updateErr
 	})
 	if retryErr != nil {
-		panic(fmt.Errorf("Update failed: %v", retryErr))
+		log.Fatal(retryErr.Error())
+		resp.WriteError(500, err)
 	}
-	fmt.Println("Updated deployment...")
-	io.WriteString(resp, "Updated deployment...")
+	log.Print("Updated deployment")
 }
 
 func ListDeployment(req *restful.Request, resp *restful.Response) {
@@ -193,17 +193,16 @@ func ListDeployment(req *restful.Request, resp *restful.Response) {
 func DeleteDeployment(req *restful.Request, resp *restful.Response) {
 	namespace := req.PathParameter("namespace-name")
 	deploymentName := req.PathParameter("deployment-name")
-	fmt.Println("Deleting deployment...")
+	log.Print("Deleting deployment...")
 	deletePolicy := metav1.DeletePropagationForeground
 	deploymentsClient := clientset.AppsV1().Deployments(namespace)
 	if err := deploymentsClient.Delete(deploymentName, &metav1.DeleteOptions{
 		PropagationPolicy: &deletePolicy,
 	}); err != nil {
-		fmt.Println(err.Error())
+		log.Fatal(err.Error())
 		resp.WriteError(500, err)
 	}
-	fmt.Println("Deleted deployment.")
-	io.WriteString(resp, "Deleted deployment.")
+	log.Print("Deleted deployment.")
 }
 
 func int32Ptr(i int32) *int32 { return &i }
